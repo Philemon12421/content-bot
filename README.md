@@ -1,55 +1,131 @@
-# 🚀 ContentPro Bot
+<div align="center">
 
-An all-in-one Telegram content bot: 35+ generators (motivation, crypto, sports,
-weather, hashtags, recipes, etc.), **live football scores**, **trending news
-with pictures**, a **QR/translate/currency/poll toolkit**, and an **automated
-channel-posting engine** that keeps your Telegram channel fed with fresh,
-niche-targeted trending content every hour (or every 15 minutes — you choose).
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:6366F1,100:22D3EE&height=220&section=header&text=ContentPro%20Bot&fontSize=60&fontColor=ffffff&animation=fadeIn&fontAlignY=35&desc=Your%20Telegram%20content%20%26%20growth%20engine&descAlignY=55&descSize=20" width="100%"/>
 
-Built to be deployed in minutes and resold/white-labeled as your own product.
+<a href="https://t.me/philemon4u">
+  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=22&duration=2500&pause=800&color=22D3EE&center=true&vCenter=true&multiline=true&width=700&height=90&lines=35%2B+content+generators+in+one+bot;Live+football+scores+%E2%9A%BD+%2B+trending+news+%F0%9F%94%A5;Auto-posts+to+YOUR+channel+every+hour;Deploy+in+minutes+%E2%80%94+resell+as+your+own+product" alt="Typing SVG" />
+</a>
+
+<br/>
+
+<img src="https://img.shields.io/badge/python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" />
+<img src="https://img.shields.io/badge/python--telegram--bot-21.6-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" />
+<img src="https://img.shields.io/badge/deploy-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white" />
+<img src="https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge" />
+<img src="https://img.shields.io/badge/status-active-brightgreen?style=for-the-badge" />
+
+<br/><br/>
+
+<a href="https://render.com/deploy">
+  <img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="40"/>
+</a>
+&nbsp;
+<a href="https://bookmei.vercel.app/">
+  <img src="https://img.shields.io/badge/📅_Book_a_site%2Fservice-6366F1?style=for-the-badge" height="40"/>
+</a>
+&nbsp;
+<a href="https://t.me/philemon4u">
+  <img src="https://img.shields.io/badge/💬_Chat_with_creator-26A5E4?style=for-the-badge" height="40"/>
+</a>
+
+</div>
+
+<br/>
+
+> Replace the Render deploy link above with `https://render.com/deploy?repo=<your-github-repo-url>` once this is pushed to GitHub, so the button deploys **your** copy directly.
 
 ---
 
-## ✨ What's inside
+## 📖 Table of Contents
+
+- [✨ What's Inside](#-whats-inside)
+- [💬 Conversational Flows](#-conversational-flows)
+- [🤖 Auto-Post to Your Channel](#-auto-post-to-your-channel-grow-views-on-autopilot)
+- [🛠 Local Setup](#-local-setup)
+- [☁️ Deploy to Render](#️-deploy-to-render-recommended-free-tier-works)
+- [🎨 White-Labeling / Reselling](#-white-labeling--reselling-this-bot)
+- [📦 Data](#-data)
+- [🔑 API Keys](#-notes-on-api-keys)
+
+---
+
+## ✨ What's Inside
+
+<img src="https://capsule-render.vercel.app/api?type=rect&color=0:1e1b4b,100:0f172a&height=3&section=header" width="100%"/>
 
 | Category | Commands |
 |---|---|
-| Core content | `/sports` `/bible` `/game` `/design` `/motivation` `/influencer` `/shop` `/tech` `/others` |
-| Enhanced content | `/weather` `/youtube` `/tweet` `/hashtags` `/business` `/crypto` `/ai` `/music` `/podcast` `/news` `/joke` `/fact` |
-| Premium | `/roast` `/story` `/recipe` `/fitness` `/travel` `/mindset` `/horoscope` `/dictionary` `/quiz` `/country` `/challenge` `/image` `/meme` |
-| **New tools** | `/football` (live scores, asks which league) · `/trending` (news + photos, asks category) · `/qr` · `/translate` · `/currency` · `/poll` · `/namecard` |
-| **Automation** | `/autopost` — connect your channel and auto-post trending news for a niche every 15 min / 30 min / 1h / 3h / 6h / 12h / 24h. `/autoposts` — pause, resume, or remove channels. |
-| Utilities | `/subscribe` `/reminder` `/setcity` `/settings` `/stats` `/links` `/start` `/help` |
+| 🧩 Core content | `/sports` `/bible` `/game` `/design` `/motivation` `/influencer` `/shop` `/tech` `/others` |
+| ⚡ Enhanced content | `/weather` `/youtube` `/tweet` `/hashtags` `/business` `/crypto` `/ai` `/music` `/podcast` `/news` `/joke` `/fact` |
+| 💎 Premium | `/roast` `/story` `/recipe` `/fitness` `/travel` `/mindset` `/horoscope` `/dictionary` `/quiz` `/country` `/challenge` `/image` `/meme` |
+| 🆕 New tools | `/football` · `/trending` · `/qr` · `/translate` · `/currency` · `/poll` · `/namecard` |
+| 🤖 Automation | `/autopost` · `/autoposts` |
+| ⚙️ Utilities | `/subscribe` `/reminder` `/setcity` `/settings` `/stats` `/links` `/start` `/help` |
 
-### Conversational flows
-The bot now **asks follow-up questions** instead of guessing:
-- Tap **Weather** → it asks which region, then which city.
-- Tap **Hashtags** → it asks your platform, then your niche.
-- Tap **Football** → it asks which league.
-- Tap **Trending** → it asks which category.
-- `/autopost` walks you through connecting a channel → picking a niche → picking a posting frequency.
+<br/>
 
-After a flow finishes, the bot does **not** re-show the whole menu — it only
-gives you a small "🏠 Menu" button, so results stay clean and the next menu
-only appears if you actually ask for it.
+<div align="center">
+<img src="https://raw.githubusercontent.com/Anmol-Baranwal/Cool-GIFs-For-Github/main/pinkflag.gif" width="35%" alt="animated divider"/>
+</div>
 
-### Auto-post to your channel (grow views on autopilot)
+## 💬 Conversational Flows
+
+The bot **asks follow-up questions** instead of guessing what you want:
+
+```
+🌤  Tap "Weather"      → "Which region?"      → "Which city?"           → forecast
+#️⃣  Tap "Hashtags"     → "Which platform?"    → "What's your niche?"    → hashtag sets
+⚽  Tap "Football"     → "Which league?"                                → live scores
+🔥  Tap "Trending"     → "Which category?"                              → news + photo
+```
+
+After any flow finishes, the bot **does not** re-show the whole menu — only a
+small **🏠 Menu** button appears, so results stay clean and the full category
+list only pops up when you actually ask for it.
+
+---
+
+## 🤖 Auto-Post to Your Channel (grow views on autopilot)
+
+<div align="center">
+
+```mermaid
+sequenceDiagram
+    participant You
+    participant Bot
+    participant Channel as Your Channel
+    You->>Bot: /autopost
+    Bot->>You: Forward a message or send @channel
+    You->>Bot: @mychannel
+    Bot->>Channel: Verify admin status
+    Bot->>You: ✅ Connected — pick a niche
+    You->>Bot: Technology
+    Bot->>You: Pick a frequency
+    You->>Bot: Every hour
+    loop Every minute (background)
+        Bot->>Bot: Check due channels
+        Bot->>Channel: 🔥 Post trending headline + photo
+    end
+```
+
+</div>
+
 1. Add the bot as an **admin** of your Telegram channel (with "Post Messages" permission).
 2. Run `/autopost` in a private chat with the bot.
 3. Forward any message from your channel (or type its `@username`).
 4. Pick a niche: general, technology, business, entertainment, health, science, or sports.
-5. Pick a posting frequency.
-6. Done — the bot checks every minute in the background and posts trending
-   headlines (with a picture, when one is available) to your channel exactly
-   on schedule. Manage your channels any time with `/autoposts`.
+5. Pick a posting frequency: 15 min, 30 min, 1h, 3h, 6h, 12h, or daily.
+6. Done — a background job checks every minute and posts trending headlines
+   (with a picture, when available) to your channel exactly on schedule.
+   Manage everything with `/autoposts` (pause / resume / remove).
 
-This works independently for every user — each person who talks to the bot
-can connect their own channel(s), pick their own niche, and set their own
-schedule; nobody's setup affects anyone else's.
+This runs **independently per user** — everyone who talks to the bot can
+connect their own channel(s), niche, and schedule without affecting anyone
+else's setup.
 
 ---
 
-## 🛠 Local setup
+## 🛠 Local Setup
 
 ```bash
 git clone <your-repo-url>
@@ -67,34 +143,37 @@ Get `TELEGRAM_TOKEN` from [@BotFather](https://t.me/BotFather) on Telegram.
 
 **Option A — One-click via Blueprint**
 1. Push this repo to GitHub.
-2. In Render, choose **New → Blueprint**, point it at your repo (it will read `render.yaml`).
-3. Set the `TELEGRAM_TOKEN` environment variable when prompted (it's marked `sync: false` so Render will ask for it — never commit your real token).
-4. Deploy. Render will run `pip install -r requirements.txt` then `python bot.py`.
+2. In Render, choose **New → Blueprint**, point it at your repo (it reads `render.yaml`).
+3. Set the `TELEGRAM_TOKEN` environment variable when prompted (kept out of git on purpose).
+4. Deploy — Render runs `pip install -r requirements.txt` then `python bot.py`.
 
 **Option B — Manual Web Service**
 1. New → Web Service → connect your repo.
 2. Build command: `pip install -r requirements.txt`
 3. Start command: `python bot.py`
-4. Add environment variable `TELEGRAM_TOKEN` (and optionally `WEBSITE_URL`, `CREATOR_USERNAME`, `BOOKING_URL` to rebrand — see below).
+4. Add `TELEGRAM_TOKEN` (and optionally `WEBSITE_URL`, `CREATOR_USERNAME`, `BOOKING_URL` to rebrand).
 5. Deploy.
 
 > **Why "Web Service" and not "Background Worker"?** Render's free tier only
-> supports Web Services, which require binding to `$PORT`. The bot itself
-> talks to Telegram via long-polling (no inbound webhook needed), so `bot.py`
-> starts a tiny built-in health-check HTTP server on `$PORT` just to satisfy
-> Render — you don't need to configure anything for this, it's automatic.
-> Free Render services sleep after inactivity; ping the service URL with
+> supports Web Services, which require binding to `$PORT`. The bot talks to
+> Telegram via long-polling (no inbound webhook needed), so `bot.py` starts a
+> tiny built-in health-check HTTP server on `$PORT` automatically — nothing to
+> configure. Free services sleep after inactivity; ping the service URL with
 > [UptimeRobot](https://uptimerobot.com) or [cron-job.org](https://cron-job.org)
-> every 5–10 minutes if you need it always-on on the free tier, or upgrade to
-> a paid instance.
+> every 5–10 minutes to keep it awake, or upgrade to a paid instance.
 
-**Other platforms:** Railway, Fly.io, and a plain VPS all work the same way —
-install `requirements.txt` and run `python bot.py` with `TELEGRAM_TOKEN` set.
-A `Procfile` is included for Heroku-style platforms too.
+> **Python version:** pinned to `3.12.7` via `runtime.txt` / `PYTHON_VERSION`
+> — this avoids a crash on Python 3.14 where `python-telegram-bot` 21.6 and
+> APScheduler rely on event-loop behavior that 3.14 removed. If you ever bump
+> dependencies, keep an eye on this.
+
+Railway, Fly.io, and a plain VPS work the same way — install
+`requirements.txt` and run `python bot.py` with `TELEGRAM_TOKEN` set. A
+`Procfile` is included for Heroku-style platforms too.
 
 ---
 
-## 🎨 White-labeling / reselling this bot
+## 🎨 White-Labeling / Reselling This Bot
 
 Every bit of branding is an environment variable, so you can resell this same
 codebase to multiple clients without touching the code:
@@ -118,15 +197,23 @@ give them a fresh `TELEGRAM_TOKEN`, and set their own `WEBSITE_URL` /
 `bot_data.db` is a SQLite database storing user settings, subscriptions,
 command stats, and auto-post configuration. It's created automatically on
 first run if it doesn't exist. Back it up periodically if you care about
-retaining user preferences (a `bot_data_backup.db` pattern is included as an
-example).
+retaining user preferences (`bot_data_backup.db` is included as an example).
 
 ---
 
-## 🔑 Notes on API keys
+## 🔑 Notes on API Keys
 
 Everything works out of the box using free, keyless public endpoints
 (Open-Meteo for weather, CoinGecko for crypto, ESPN for sports/football, a
 NewsAPI mirror for news/trending, MyMemory for translation, Frankfurter for
 currency, etc). `COINGECKO_API_KEY` and `NEWSAPI_KEY` are optional — add them
 only if you hit rate limits and have paid keys for those services.
+
+<br/>
+
+<div align="center">
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:22D3EE,100:6366F1&height=150&section=footer"/>
+
+Made with ❤️ by **Drenchack** · [Website](https://dtc-official.vercel.app) · [Contact](https://t.me/philemon4u) · [Book a service](https://bookmei.vercel.app/)
+
+</div>
