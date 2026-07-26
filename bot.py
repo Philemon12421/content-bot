@@ -20,6 +20,8 @@ Features:
   Utilities:  /subscribe /reminder /settings /setcity /help /stats
 """
 
+from dotenv import load_dotenv
+load_dotenv()
 import os
 import sys
 import json
