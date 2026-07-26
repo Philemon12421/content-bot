@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║          CONTENT CREATOR PRO BOT  v3.0                                      ║
+║          CONTENT CREATOR PRO BOT  v4.0                                      ║
 ║          Made with ❤️  by Drenchack                                         ║
 ║          Telegram: @drenchack                                                ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-A professional Telegram bot for content creators with 30+ content categories.
-All features use FREE APIs - no paid subscriptions required.
+A professional Telegram bot for content creators with 35+ content categories,
+live football scores, trending news with pictures, and an automated
+channel-posting engine. All features use FREE APIs - no paid subscriptions required.
 
 Features:
   Core:       /sports /bible /game /design /motivation /influencer
@@ -15,9 +16,11 @@ Features:
   Enhanced:   /weather /youtube /tweet /hashtags /business /crypto
               /ai /music /podcast /image /news /joke /fact
   Premium:    /roast /story /recipe /fitness /travel /mindset
-              /affirmation /horoscope /dictionary /translate
-              /qr /poll /quiz /meme /challenge /namecard
-  Utilities:  /subscribe /reminder /settings /setcity /help /stats
+              /horoscope /dictionary /quiz /meme /challenge
+  New tools:  /football /trending /qr /translate /currency /poll /namecard
+  Automation: /autopost /autoposts — auto-post niche trending news to a
+              user's own Telegram channel on a set schedule
+  Utilities:  /subscribe /reminder /settings /setcity /help /stats /links
 """
 
 from dotenv import load_dotenv
@@ -73,9 +76,16 @@ except ImportError:
 TELEGRAM_TOKEN      = os.environ.get("TELEGRAM_TOKEN", "YOUR_BOT_TOKEN_HERE")
 COINGECKO_API_KEY   = os.environ.get("COINGECKO_API_KEY", None)
 NEWSAPI_KEY         = os.environ.get("NEWSAPI_KEY", None)
-BOT_VERSION         = "3.0.0"
+BOT_VERSION         = "4.0.0"
 BOT_AUTHOR          = "Drenchack"
 BOT_AUTHOR_LINK     = "https://t.me/drenchack"
+
+# ─── Brand / Business Links (edit these via env vars when white-labeling) ─────
+WEBSITE_URL         = os.environ.get("WEBSITE_URL", "https://dtc-official.vercel.app")
+CREATOR_USERNAME    = os.environ.get("CREATOR_USERNAME", "philemon4u")
+CREATOR_LINK        = f"https://t.me/{CREATOR_USERNAME}"
+BOOKING_URL         = os.environ.get("BOOKING_URL", "https://bookmei.vercel.app/")
+PORT                = int(os.environ.get("PORT", "10000"))
 
 # ─── API Endpoints ─────────────────────────────────────────────────────────────
 ESPN_BASE        = "http://site.api.espn.com/apis/site/v2/sports"
@@ -103,6 +113,10 @@ MEAL_API         = "https://www.themealdb.com/api/json/v1/1"
 DOG_API          = "https://dog.ceo/api/breeds/image/random"
 CAT_FACT_API     = "https://catfact.ninja/fact"
 NUMBER_API       = "http://numbersapi.com"
+TRANSLATE_API    = "https://api.mymemory.translated.net/get"
+CURRENCY_API     = "https://api.frankfurter.app"
+IPINFO_API       = "https://ipapi.co"
+ADVICE_SLIP_API  = "https://api.adviceslip.com/advice"
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 DEFAULT_LAT  = 40.7128
@@ -147,6 +161,16 @@ def init_db():
         first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         total_commands INTEGER DEFAULT 0)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS autopost_config (
+        user_id INTEGER,
+        channel_id TEXT,
+        channel_title TEXT,
+        niche TEXT DEFAULT 'general',
+        interval_minutes INTEGER DEFAULT 60,
+        enabled INTEGER DEFAULT 1,
+        last_posted_at TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, channel_id))""")
     conn.commit()
     conn.close()
 
@@ -271,6 +295,98 @@ def db_get_total_users() -> int:
     return count
 
 
+# ─── Autopost (channel auto-posting) storage ──────────────────────────────────
+_mem_autopost: Dict[str, dict] = {}  # f"{user_id}:{channel_id}" -> config dict
+
+
+def db_add_autopost(user_id: int, channel_id, channel_title: str, niche: str, interval_minutes: int):
+    key = f"{user_id}:{channel_id}"
+    if not HAS_DB:
+        _mem_autopost[key] = {
+            "user_id": user_id, "channel_id": str(channel_id), "channel_title": channel_title,
+            "niche": niche, "interval_minutes": interval_minutes, "enabled": 1, "last_posted_at": None,
+        }
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""INSERT INTO autopost_config (user_id, channel_id, channel_title, niche, interval_minutes, enabled)
+        VALUES (?,?,?,?,?,1)
+        ON CONFLICT(user_id, channel_id) DO UPDATE SET
+        channel_title=?, niche=?, interval_minutes=?, enabled=1""",
+        (user_id, str(channel_id), channel_title, niche, interval_minutes,
+         channel_title, niche, interval_minutes))
+    conn.commit()
+    conn.close()
+
+
+def _row_to_autopost_dict(row) -> dict:
+    keys = ["user_id", "channel_id", "channel_title", "niche", "interval_minutes",
+            "enabled", "last_posted_at", "created_at"]
+    return {k: v for k, v in zip(keys, row)}
+
+
+def db_get_autopost_by_user(user_id: int) -> List[dict]:
+    if not HAS_DB:
+        return [v for v in _mem_autopost.values() if v["user_id"] == user_id]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM autopost_config WHERE user_id=?", (user_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [_row_to_autopost_dict(r) for r in rows]
+
+
+def db_get_all_autopost_enabled() -> List[dict]:
+    if not HAS_DB:
+        return [v for v in _mem_autopost.values() if v.get("enabled")]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM autopost_config WHERE enabled=1")
+    rows = c.fetchall()
+    conn.close()
+    return [_row_to_autopost_dict(r) for r in rows]
+
+
+def db_set_autopost_enabled(user_id: int, channel_id, enabled: bool):
+    key = f"{user_id}:{channel_id}"
+    if not HAS_DB:
+        if key in _mem_autopost:
+            _mem_autopost[key]["enabled"] = 1 if enabled else 0
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE autopost_config SET enabled=? WHERE user_id=? AND channel_id=?",
+              (1 if enabled else 0, user_id, str(channel_id)))
+    conn.commit()
+    conn.close()
+
+
+def db_delete_autopost(user_id: int, channel_id):
+    key = f"{user_id}:{channel_id}"
+    if not HAS_DB:
+        _mem_autopost.pop(key, None)
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM autopost_config WHERE user_id=? AND channel_id=?", (user_id, str(channel_id)))
+    conn.commit()
+    conn.close()
+
+
+def db_update_autopost_last_posted(user_id: int, channel_id, when_iso: str):
+    key = f"{user_id}:{channel_id}"
+    if not HAS_DB:
+        if key in _mem_autopost:
+            _mem_autopost[key]["last_posted_at"] = when_iso
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE autopost_config SET last_posted_at=? WHERE user_id=? AND channel_id=?",
+              (when_iso, user_id, str(channel_id)))
+    conn.commit()
+    conn.close()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -312,7 +428,19 @@ def progress_bar(value: float, max_val: float = 100, width: int = 10) -> str:
 # BRANDING & KEYBOARDS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-BRAND_FOOTER = f"\n\n<i>🤖 Powered by <b>ContentPro Bot</b> | Made by <a href='{BOT_AUTHOR_LINK}'>{BOT_AUTHOR}</a></i>"
+BRAND_FOOTER = (
+    f"\n\n<i>🤖 Powered by <b>ContentPro Bot</b> | Made by "
+    f"<a href='{BOT_AUTHOR_LINK}'>{BOT_AUTHOR}</a></i>\n"
+    f"<i>🌐 <a href='{WEBSITE_URL}'>Website</a> · "
+    f"💬 <a href='{CREATOR_LINK}'>Contact us</a> · "
+    f"🗓 <a href='{BOOKING_URL}'>Book a site/consultation</a></i>"
+)
+
+LINKS_KB = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🌐 Official Website", url=WEBSITE_URL)],
+    [InlineKeyboardButton("💬 Chat With Creator", url=CREATOR_LINK)],
+    [InlineKeyboardButton("🗓 Book a Site / Service", url=BOOKING_URL)],
+])
 
 WELCOME_ART = """
 ╔═══════════════════════════════════╗
@@ -320,9 +448,68 @@ WELCOME_ART = """
 ║       Made by  D R E N C H A C K  ║
 ╚═══════════════════════════════════╝"""
 
+# ─── Regions / Quick-pick cities for the conversational /weather flow ─────────
+WEATHER_REGIONS = {
+    "africa":   ["Accra", "Lagos", "Nairobi", "Cairo", "Johannesburg", "Kumasi"],
+    "europe":   ["London", "Paris", "Berlin", "Madrid", "Rome", "Amsterdam"],
+    "americas": ["New York", "Los Angeles", "Toronto", "Mexico City", "Sao Paulo", "Chicago"],
+    "asia_pac": ["Tokyo", "Dubai", "Singapore", "Mumbai", "Sydney", "Seoul"],
+}
+
+# ─── Football leagues (ESPN soccer codes) for the /football flow ─────────────
+FOOTBALL_LEAGUES = {
+    "epl":    ("🏴 Premier League",  "soccer/eng.1"),
+    "laliga": ("🇪🇸 La Liga",        "soccer/esp.1"),
+    "seriea": ("🇮🇹 Serie A",        "soccer/ita.1"),
+    "bund":   ("🇩🇪 Bundesliga",     "soccer/ger.1"),
+    "ligue1": ("🇫🇷 Ligue 1",        "soccer/fra.1"),
+    "ucl":    ("🏆 Champions League","soccer/uefa.champions"),
+    "wc":     ("🌍 World Cup",       "soccer/fifa.world"),
+}
+
+# ─── Common languages for the /translate flow ─────────────────────────────────
+TRANSLATE_LANGS = {
+    "es": "Spanish", "fr": "French", "de": "German", "pt": "Portuguese",
+    "ar": "Arabic",  "zh": "Chinese", "sw": "Swahili", "yo": "Yoruba",
+    "ha": "Hausa",   "tw": "Twi",     "en": "English", "ru": "Russian",
+}
+
+# ─── Currency codes for the /currency flow ────────────────────────────────────
+CURRENCIES = ["USD", "EUR", "GBP", "GHS", "NGN", "ZAR", "KES", "CAD"]
+
 
 def make_keyboard(rows: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONVERSATION STATE (generic "ask the user a follow-up question" engine)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Any handler can call `await ask(update, context, "some_state", text, keyboard)`
+# to pause and wait for the user's next message/tap. `handle_message` and
+# `button_handler` check `context.user_data['awaiting']` first, before falling
+# back to normal command/keyword routing. This is what powers "click Weather ->
+# bot asks which region", "type a hashtag topic -> bot asks the platform", etc.
+
+async def ask(update: Update, context: ContextTypes.DEFAULT_TYPE, state: str,
+              text: str, keyboard: InlineKeyboardMarkup = None, is_callback: bool = False,
+              data: dict = None):
+    """Store a pending conversation state and prompt the user for more info."""
+    context.user_data["awaiting"] = {"state": state, "data": data or {}}
+    if is_callback and update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(
+                text, parse_mode=ParseMode.HTML, reply_markup=keyboard, disable_web_page_preview=True
+            )
+            return
+        except Exception:
+            pass
+    target = update.effective_message
+    await target.reply_html(text, reply_markup=keyboard, disable_web_page_preview=True)
+
+
+def clear_awaiting(context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("awaiting", None)
 
 
 MAIN_KB = make_keyboard([
@@ -359,9 +546,18 @@ MAIN_KB = make_keyboard([
     [InlineKeyboardButton("🌍 Country",    callback_data="cmd_country"),
      InlineKeyboardButton("🎉 Challenge",  callback_data="cmd_challenge"),
      InlineKeyboardButton("🖼 Image",      callback_data="cmd_image")],
+    [InlineKeyboardButton("⚽ Live Football", callback_data="cmd_football"),
+     InlineKeyboardButton("🔥 Trending",   callback_data="cmd_trending"),
+     InlineKeyboardButton("🔲 QR Code",    callback_data="cmd_qr")],
+    [InlineKeyboardButton("🌐 Translate",  callback_data="cmd_translate"),
+     InlineKeyboardButton("💱 Currency",   callback_data="cmd_currency"),
+     InlineKeyboardButton("📊 Poll",       callback_data="cmd_poll")],
     [InlineKeyboardButton("🔔 Subscribe",  callback_data="cmd_show_subscribe"),
      InlineKeyboardButton("⏰ Reminder",   callback_data="cmd_show_reminder"),
      InlineKeyboardButton("📊 My Stats",   callback_data="cmd_mystats")],
+    [InlineKeyboardButton("🤖 Auto-Post to My Channel", callback_data="cmd_autopost"),
+     InlineKeyboardButton("📡 My Auto-Posts", callback_data="cmd_autoposts")],
+    [InlineKeyboardButton("🔗 Website / Contact / Booking", callback_data="cmd_links")],
 ])
 
 
@@ -377,15 +573,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"<pre>{WELCOME_ART}</pre>\n\n"
         f"👋 Welcome, <b>{sanitize(user.first_name)}</b>!\n\n"
-        f"<b>ContentPro Bot</b> generates unique content across <b>30+ categories</b> "
+        f"<b>ContentPro Bot</b> generates unique content across <b>35+ categories</b> "
         f"for your social media, blogs &amp; creative work.\n\n"
         f"✅ <b>100% Free APIs</b> - No subscriptions needed\n"
         f"📅 <b>Fresh content daily</b> - Changes every 24 hours\n"
         f"🔔 <b>Auto-delivery</b> - Subscribe &amp; receive daily content\n"
+        f"🤖 <b>Auto-post to your channel</b> - Trending news, on autopilot\n"
+        f"⚽ <b>Live football scores</b> &amp; 🔥 trending news with pictures\n"
         f"🌍 <b>Global</b> - Weather, news &amp; trends worldwide\n\n"
         f"<b>👥 Community:</b> {total_users:,} creators using this bot\n\n"
         f"🎯 <b>Tap any button below to get started!</b>\n\n"
-        f"<i>Type /help for the full command list</i>"
+        f"<i>Type /help for the full command list, or /links for our website &amp; contact info.</i>"
     )
     await update.message.reply_html(text, reply_markup=MAIN_KB)
 
@@ -430,12 +628,24 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/challenge - 30-day challenge ideas\n"
         f"/image [prompt] - AI image generation\n"
         f"/meme - Random meme\n\n"
+        f"<b>━━ NEW TOOLS ━━</b>\n"
+        f"/football - Live scores (asks which league)\n"
+        f"/trending - Trending news with pictures (asks category)\n"
+        f"/qr [text] - Generate a QR code\n"
+        f"/translate [lang] [text] - Translate text\n"
+        f"/currency [amount] [from] [to] - Live currency conversion\n"
+        f"/poll [question] - Create a Telegram poll\n"
+        f"/namecard [tagline] - Shareable creator card\n\n"
+        f"<b>━━ AUTOMATION ━━</b>\n"
+        f"/autopost - Auto-post trending news to YOUR channel\n"
+        f"/autoposts - Manage/pause/remove your auto-post channels\n\n"
         f"<b>━━ UTILITIES ━━</b>\n"
         f"/subscribe - Daily auto-content\n"
         f"/reminder - Schedule reminders\n"
         f"/setcity [city] - Set location\n"
         f"/settings - Your preferences\n"
         f"/stats - Bot statistics\n"
+        f"/links - Website, contact &amp; booking\n"
         f"/start - Main menu\n\n"
         f"{BRAND_FOOTER}"
     )
@@ -492,6 +702,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "dictionary": cmd_dictionary, "quiz": cmd_quiz,
         "country": cmd_country, "challenge": cmd_challenge,
         "image": cmd_image, "meme": cmd_meme,
+        "football": cmd_football, "trending": cmd_trending,
+        "qr": cmd_qr, "translate": cmd_translate, "currency": cmd_currency,
+        "poll": cmd_poll, "namecard": cmd_namecard, "links": cmd_links,
+        "autopost": cmd_autopost, "autoposts": cmd_autoposts,
     }
 
     handler = handlers.get(cmd)
@@ -504,6 +718,150 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handler(update, context, is_callback=True)
     else:
         await query.edit_message_text("❓ Unknown command.", parse_mode=ParseMode.HTML)
+
+
+async def flow_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles taps that are part of a multi-step conversational flow (weather region ->
+    city, hashtag platform -> niche, football league, translate language, currency pair)."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data.startswith("wx_region_"):
+        region = data.replace("wx_region_", "")
+        await weather_region_selected(update, context, region)
+
+    elif data == "wx_saved":
+        clear_awaiting(context)
+        settings = db_get_user_setting(update.effective_user.id)
+        await render_weather(update, context, settings.get("lat", DEFAULT_LAT),
+                              settings.get("lon", DEFAULT_LON), settings.get("city", DEFAULT_CITY), True)
+
+    elif data == "wx_typecity":
+        await ask(update, context, "weather_city_text",
+                  "<b>🌤 WEATHER</b>\n\n✍️ Type the name of the city:", is_callback=True)
+
+    elif data.startswith("wx_city_"):
+        city_name = data.replace("wx_city_", "")
+        clear_awaiting(context)
+        geo = fetch_json(GEO_API, {"name": city_name, "count": 1, "language": "en", "format": "json"})
+        if "error" not in geo and geo.get("results"):
+            r = geo["results"][0]
+            lat, lon = r.get("latitude", DEFAULT_LAT), r.get("longitude", DEFAULT_LON)
+            full_name = f"{r.get('name', city_name)}, {r.get('country', '')}"
+        else:
+            lat, lon, full_name = DEFAULT_LAT, DEFAULT_LON, city_name
+        await render_weather(update, context, lat, lon, full_name, True)
+
+    elif data.startswith("ht_platform_"):
+        platform = data.replace("ht_platform_", "")
+        await hashtag_platform_selected(update, context, platform)
+
+    elif data.startswith("ht_niche_"):
+        niche = data.replace("ht_niche_", "")
+        awaiting = context.user_data.get("awaiting", {})
+        platform = awaiting.get("data", {}).get("platform", "Instagram")
+        clear_awaiting(context)
+        await render_hashtags(update, context, platform, niche, True)
+
+    elif data.startswith("fb_league_"):
+        league_key = data.replace("fb_league_", "")
+        clear_awaiting(context)
+        try:
+            await query.edit_message_text("⏳ Fetching live football updates...", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+        await render_football(update, context, league_key, True)
+
+    elif data.startswith("tr_cat_"):
+        cat = data.replace("tr_cat_", "")
+        clear_awaiting(context)
+        try:
+            await query.edit_message_text("⏳ Fetching trending news...", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+        await render_trending(update, context, cat, True)
+
+    elif data.startswith("tl_lang_"):
+        lang = data.replace("tl_lang_", "")
+        await ask(update, context, "translate_text",
+                  f"<b>🌐 TRANSLATE</b>\n\n✍️ Send the text you want translated to <b>{TRANSLATE_LANGS.get(lang, lang)}</b>.",
+                  is_callback=True, data={"lang": lang})
+
+    elif data.startswith("cur_from_"):
+        cfrom = data.replace("cur_from_", "")
+        await ask(update, context, "currency_to",
+                  f"<b>💱 CURRENCY CONVERTER</b>\n\nConverting from <b>{cfrom}</b>. Which currency TO?",
+                  _currency_to_keyboard(cfrom), is_callback=True, data={"from": cfrom})
+
+    elif data.startswith("cur_to_"):
+        cto = data.replace("cur_to_", "")
+        awaiting = context.user_data.get("awaiting", {})
+        cfrom = awaiting.get("data", {}).get("from", "USD")
+        await ask(update, context, "currency_amount",
+                  f"<b>💱 CURRENCY CONVERTER</b>\n\n{cfrom} → {cto}. ✍️ How much {cfrom} do you want to convert?",
+                  is_callback=True, data={"from": cfrom, "to": cto})
+
+    elif data.startswith("apn_"):
+        niche = data.replace("apn_", "")
+        awaiting = context.user_data.get("awaiting", {})
+        adata = awaiting.get("data", {})
+        await ask(update, context, "autopost_frequency",
+                  f"<b>🤖 AUTO-POST</b>\n\nNiche set to <b>{sanitize(niche.title())}</b> ✅\n\n"
+                  f"<b>Step 3 — How often</b> should I post to your channel?",
+                  _autopost_frequency_keyboard(), is_callback=True,
+                  data={**adata, "niche": niche})
+
+    elif data.startswith("apf_"):
+        minutes = int(data.replace("apf_", ""))
+        awaiting = context.user_data.get("awaiting", {})
+        adata = awaiting.get("data", {})
+        clear_awaiting(context)
+        user_id = update.effective_user.id
+        channel_id = adata.get("channel_id")
+        channel_title = adata.get("channel_title", str(channel_id))
+        niche = adata.get("niche", "general")
+        if channel_id is None:
+            try:
+                await query.edit_message_text("❌ Something went wrong — run /autopost to start over.", parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+        else:
+            db_add_autopost(user_id, channel_id, channel_title, niche, minutes)
+            freq_label = next((l for l, m in AUTOPOST_FREQUENCIES if m == minutes), f"{minutes} min")
+            try:
+                await query.edit_message_text(
+                    f"<b>✅ AUTO-POST ACTIVATED</b>\n\n"
+                    f"Channel: <b>{sanitize(channel_title)}</b>\n"
+                    f"Niche: <b>{sanitize(niche.title())}</b>\n"
+                    f"Frequency: <b>{freq_label}</b>\n\n"
+                    f"I'll post trending {sanitize(niche)} news there automatically from now on. "
+                    f"Manage it any time with /autoposts." + BRAND_FOOTER,
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+
+    elif data.startswith("apt_"):
+        channel_id = data.replace("apt_", "")
+        user_id = update.effective_user.id
+        configs = {c["channel_id"]: c for c in db_get_autopost_by_user(user_id)}
+        cfg = configs.get(channel_id)
+        if cfg:
+            db_set_autopost_enabled(user_id, channel_id, not cfg.get("enabled"))
+        await cmd_autoposts(update, context, is_callback=True)
+
+    elif data.startswith("apd_"):
+        channel_id = data.replace("apd_", "")
+        user_id = update.effective_user.id
+        db_delete_autopost(user_id, channel_id)
+        await cmd_autoposts(update, context, is_callback=True)
+
+    else:
+        try:
+            await query.edit_message_text("❓ That option expired. Try the command again.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -640,6 +998,97 @@ async def cmd_sports(update: Update, context: ContextTypes.DEFAULT_TYPE, is_call
     if len(lines) < 4:
         response = "<b>⚽ SPORTS</b>\nNo live games right now. Check back during active game times!" + BRAND_FOOTER
     await _send(update, response, is_callback)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LIVE FOOTBALL UPDATES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _football_league_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    row = []
+    for i, (key, (label, _path)) in enumerate(FOOTBALL_LEAGUES.items()):
+        row.append(InlineKeyboardButton(label, callback_data=f"fb_league_{key}"))
+        if (i + 1) % 2 == 0:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("🔥 All Leagues (quick view)", callback_data="fb_league_all")])
+    return make_keyboard(rows)
+
+
+async def cmd_football(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """Entry point: ask which league before showing live football updates."""
+    track_command("football")
+    await ask(
+        update, context, "football_league",
+        "<b>⚽ LIVE FOOTBALL</b>\n\nWhich league do you want live scores &amp; fixtures for?",
+        _football_league_keyboard(), is_callback,
+    )
+
+
+async def render_football(update: Update, context: ContextTypes.DEFAULT_TYPE, league_key: str, is_callback: bool):
+    leagues = list(FOOTBALL_LEAGUES.items()) if league_key == "all" else \
+        [(league_key, FOOTBALL_LEAGUES[league_key])] if league_key in FOOTBALL_LEAGUES else []
+
+    if not leagues:
+        await _send(update, "<b>⚽ LIVE FOOTBALL</b>\n⚠️ Unknown league.", is_callback)
+        return
+
+    lines = ["<b>⚽ LIVE FOOTBALL UPDATES</b>\n"]
+    any_events = False
+    logo_url = None
+
+    for key, (label, path) in leagues:
+        data = fetch_json(f"{ESPN_BASE}/{path}/scoreboard")
+        if "error" in data:
+            continue
+        events = data.get("events", [])[:5]
+        if not events:
+            continue
+        lines.append(f"<b>{label}</b>")
+        for event in events:
+            comp = event.get("competitions", [{}])[0]
+            status = comp.get("status", {}).get("type", {})
+            state_desc = status.get("shortDetail") or status.get("description", "")
+            is_live = status.get("state") == "in"
+            competitors = comp.get("competitors", [])
+            team_bits = []
+            for c in competitors:
+                team = c.get("team", {})
+                abbrev = team.get("abbreviation") or team.get("shortDisplayName", "?")
+                score = c.get("score", "0")
+                team_bits.append(f"{abbrev} {score}")
+                if is_live and not logo_url:
+                    logo_url = team.get("logo")
+            if team_bits:
+                live_tag = "🔴 LIVE" if is_live else state_desc
+                lines.append(f"  {' vs '.join(team_bits)}  —  {live_tag}")
+                any_events = True
+        lines.append("")
+
+    if not any_events:
+        text = (
+            f"<b>⚽ LIVE FOOTBALL</b>\n\nNo fixtures found right now for this selection. "
+            f"Check back closer to match day!" + BRAND_FOOTER
+        )
+        await _send(update, text, is_callback)
+        return
+
+    lines.append("<b>💡 Content Idea:</b> Post a live-score graphic with your prediction before kickoff.")
+    text = "\n".join(lines) + BRAND_FOOTER
+
+    # If we found a live match with a team logo, send it as a photo for extra engagement.
+    if logo_url:
+        try:
+            if is_callback and update.callback_query:
+                await update.callback_query.message.reply_photo(logo_url, caption=text[:1024], parse_mode=ParseMode.HTML, reply_markup=BACK_TO_MENU_KB)
+            else:
+                await update.effective_message.reply_photo(logo_url, caption=text[:1024], parse_mode=ParseMode.HTML, reply_markup=BACK_TO_MENU_KB)
+            return
+        except Exception:
+            pass
+    await _send(update, text, is_callback)
 
 
 async def cmd_bible(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
@@ -1189,14 +1638,52 @@ async def cmd_others(update: Update, context: ContextTypes.DEFAULT_TYPE, is_call
     await _send(update, response, is_callback)
 
 
-async def cmd_weather(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
-    track_command("weather")
-    user_id = update.effective_user.id
-    settings = db_get_user_setting(user_id)
-    lat  = settings.get("lat",  DEFAULT_LAT)
-    lon  = settings.get("lon",  DEFAULT_LON)
-    city = settings.get("city", DEFAULT_CITY)
+def _weather_region_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton("🌍 Africa", callback_data="wx_region_africa"),
+         InlineKeyboardButton("🇪🇺 Europe", callback_data="wx_region_europe")],
+        [InlineKeyboardButton("🌎 Americas", callback_data="wx_region_americas"),
+         InlineKeyboardButton("🌏 Asia/Pacific", callback_data="wx_region_asia_pac")],
+        [InlineKeyboardButton("📍 Use my saved city", callback_data="wx_saved")],
+        [InlineKeyboardButton("✍️ Type a city name", callback_data="wx_typecity")],
+    ]
+    return make_keyboard(rows)
 
+
+async def cmd_weather(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """Entry point: always asks which region/city first, per the conversational flow."""
+    track_command("weather")
+    settings = db_get_user_setting(update.effective_user.id)
+    city = settings.get("city", DEFAULT_CITY)
+    text = (
+        f"<b>🌤 WEATHER</b>\n\n"
+        f"Which region are you checking the weather for? "
+        f"(Your saved city is <b>{sanitize(city)}</b>)"
+    )
+    await ask(update, context, "weather_region", text, _weather_region_keyboard(), is_callback)
+
+
+async def weather_region_selected(update: Update, context: ContextTypes.DEFAULT_TYPE, region: str):
+    cities = WEATHER_REGIONS.get(region, [])
+    rows = []
+    row = []
+    for i, c in enumerate(cities):
+        row.append(InlineKeyboardButton(c, callback_data=f"wx_city_{c}"))
+        if (i + 1) % 2 == 0:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("✍️ Type a different city", callback_data="wx_typecity")])
+    rows.append([InlineKeyboardButton("🏠 Back", callback_data="cmd_back_main")])
+    await ask(
+        update, context, "weather_city",
+        "<b>🌤 WEATHER</b>\n\nPick a city, or type a different one:",
+        make_keyboard(rows), is_callback=True, data={"region": region},
+    )
+
+
+async def render_weather(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                          lat: float, lon: float, city: str, is_callback: bool):
     params = {
         "latitude": lat, "longitude": lon,
         "current": "temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,uv_index",
@@ -1386,57 +1873,91 @@ async def cmd_tweet(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callb
     await _send(update, response, is_callback)
 
 
+HASHTAG_POOLS = {
+    "general":  ["#ContentCreator #Viral #Trending #Explore #MustWatch #GoViral",
+                 "#Creator #Content #NewPost #DailyContent #ViralContent #CreatorLife"],
+    "tech":     ["#TechNews #AI #Innovation #Technology #Future #ArtificialIntelligence",
+                 "#Programming #Coding #Developer #Software #TechLife #MachineLearning"],
+    "lifestyle":["#Lifestyle #Motivation #Mindset #SelfCare #GrowthMindset #Wellness",
+                 "#MorningRoutine #Productivity #SelfImprovement #Focus #Goals"],
+    "business": ["#Business #Entrepreneur #Startup #Marketing #Branding #Growth",
+                 "#DigitalMarketing #SideHustle #Ecommerce #BusinessTips #StartupLife"],
+    "creative": ["#Creative #Design #Art #Photography #GraphicDesign #Artist",
+                 "#DigitalArt #Creativity #DesignInspo #CreativeProcess #VisualArt"],
+    "fitness":  ["#Fitness #Workout #GymLife #FitFam #HealthyLiving #Training",
+                 "#Nutrition #Gains #FitnessMotivation #ExerciseDaily #StayFit"],
+    "food":     ["#FoodPhotography #Foodie #Recipe #Cooking #Delicious #FoodBlogger",
+                 "#HomeCooking #MealPrep #FoodContent #Yummy #FoodPorn"],
+}
+HASHTAG_PLATFORM_ADVICE = {
+    "Instagram":"Use 25-30 hashtags. Mix sizes: 30% mega (500k+), 40% medium, 30% small niche.",
+    "TikTok":   "Use 3-5 relevant hashtags. Trending > niche on TikTok. Keep in caption.",
+    "Twitter/X":"1-3 hashtags max. More looks spammy. #Thread for threads.",
+    "LinkedIn": "3-5 professional hashtags. Industry-specific ones get most traction.",
+    "YouTube":  "15 tags in video settings. Include title keywords + variations.",
+    "Pinterest":"5-10 keyword-rich hashtags. Descriptive > trendy on Pinterest.",
+}
+HASHTAG_STRATEGIES = [
+    "🏋 Mix: 20% mega (1M+), 30% large (200k-1M), 30% medium (20k-200k), 20% micro",
+    "🔄 Rotate hashtag sets every 2 weeks to avoid shadowban",
+    "🎯 Create a branded hashtag unique to your content",
+    "🔬 Test 3 different hashtag sets and compare analytics",
+    "📊 Check which hashtags drive the most profile visits",
+]
+
+
 async def cmd_hashtags(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """Entry point: asks which platform first, then which niche."""
     track_command("hashtags")
-    seed = generate_daily_seed("hashtags")
+    rows = []
+    row = []
+    for i, p in enumerate(HASHTAG_PLATFORM_ADVICE.keys()):
+        row.append(InlineKeyboardButton(p, callback_data=f"ht_platform_{p}"))
+        if (i + 1) % 2 == 0:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    await ask(
+        update, context, "hashtag_platform",
+        "<b># HASHTAGS</b>\n\nWhich platform are you posting to?",
+        make_keyboard(rows), is_callback,
+    )
+
+
+async def hashtag_platform_selected(update: Update, context: ContextTypes.DEFAULT_TYPE, platform: str):
+    rows = []
+    row = []
+    for i, cat in enumerate(HASHTAG_POOLS.keys()):
+        row.append(InlineKeyboardButton(cat.title(), callback_data=f"ht_niche_{cat}"))
+        if (i + 1) % 2 == 0:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    await ask(
+        update, context, "hashtag_niche",
+        f"<b># HASHTAGS</b>\n\nGot it — <b>{sanitize(platform)}</b>. What's your niche?",
+        make_keyboard(rows), is_callback=True, data={"platform": platform},
+    )
+
+
+async def render_hashtags(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                           platform: str, niche: str, is_callback: bool):
+    seed = generate_daily_seed(f"hashtags-{platform}-{niche}")
     random.seed(seed)
-
-    pools = {
-        "general":  ["#ContentCreator #Viral #Trending #Explore #MustWatch #GoViral",
-                     "#Creator #Content #NewPost #DailyContent #ViralContent #CreatorLife"],
-        "tech":     ["#TechNews #AI #Innovation #Technology #Future #ArtificialIntelligence",
-                     "#Programming #Coding #Developer #Software #TechLife #MachineLearning"],
-        "lifestyle":["#Lifestyle #Motivation #Mindset #SelfCare #GrowthMindset #Wellness",
-                     "#MorningRoutine #Productivity #SelfImprovement #Focus #Goals"],
-        "business": ["#Business #Entrepreneur #Startup #Marketing #Branding #Growth",
-                     "#DigitalMarketing #SideHustle #Ecommerce #BusinessTips #StartupLife"],
-        "creative": ["#Creative #Design #Art #Photography #GraphicDesign #Artist",
-                     "#DigitalArt #Creativity #DesignInspo #CreativeProcess #VisualArt"],
-        "fitness":  ["#Fitness #Workout #GymLife #FitFam #HealthyLiving #Training",
-                     "#Nutrition #Gains #FitnessMotivation #ExerciseDaily #StayFit"],
-        "food":     ["#FoodPhotography #Foodie #Recipe #Cooking #Delicious #FoodBlogger",
-                     "#HomeCooking #MealPrep #FoodContent #Yummy #FoodPorn"],
-    }
-    platform_advice = {
-        "Instagram":"Use 25-30 hashtags. Mix sizes: 30% mega (500k+), 40% medium, 30% small niche.",
-        "TikTok":   "Use 3-5 relevant hashtags. Trending > niche on TikTok. Keep in caption.",
-        "Twitter/X":"1-3 hashtags max. More looks spammy. #Thread for threads.",
-        "LinkedIn": "3-5 professional hashtags. Industry-specific ones get most traction.",
-        "YouTube":  "15 tags in video settings. Include title keywords + variations.",
-        "Pinterest":"5-10 keyword-rich hashtags. Descriptive > trendy on Pinterest.",
-    }
-    strategies = [
-        "🏋 Mix: 20% mega (1M+), 30% large (200k-1M), 30% medium (20k-200k), 20% micro",
-        "🔄 Rotate hashtag sets every 2 weeks to avoid shadowban",
-        "🎯 Create a branded hashtag unique to your content",
-        "🔬 Test 3 different hashtag sets and compare analytics",
-        "📊 Check which hashtags drive the most profile visits",
-    ]
-
+    pools = HASHTAG_POOLS
+    cat1 = niche if niche in pools else "general"
     cats = list(pools.keys())
-    cat1 = cats[seed % len(cats)]
     cat2 = cats[(seed + 2) % len(cats)]
-    platforms = list(platform_advice.keys())
-    platform  = platforms[seed % len(platforms)]
+    advice = HASHTAG_PLATFORM_ADVICE.get(platform, "Adapt hashtag count to what your platform's algorithm favors.")
 
     response = (
-        f"<b># HASHTAGS | Optimized Sets</b>\n\n"
-        f"<b>📱 {platform} Strategy:</b>\n{platform_advice[platform]}\n\n"
+        f"<b># HASHTAGS | {sanitize(platform)} · {sanitize(cat1.title())}</b>\n\n"
+        f"<b>📱 {sanitize(platform)} Strategy:</b>\n{sanitize(advice)}\n\n"
         f"<b>Set 1 — {cat1.title()}:</b>\n{pools[cat1][seed % len(pools[cat1])]}\n\n"
         f"<b>Set 2 — {cat2.title()}:</b>\n{pools[cat2][(seed+1) % len(pools[cat2])]}\n\n"
         f"<b>Set 3 — Mixed:</b>\n{pools['general'][seed % len(pools['general'])]} "
         f"{pools[cat1][(seed+2) % len(pools[cat1])]}\n\n"
-        f"<b>🧠 Hashtag Strategy:</b>\n{strategies[seed % len(strategies)]}"
+        f"<b>🧠 Hashtag Strategy:</b>\n{HASHTAG_STRATEGIES[seed % len(HASHTAG_STRATEGIES)]}"
         + BRAND_FOOTER
     )
     await _send(update, response, is_callback)
@@ -1794,6 +2315,79 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callba
     lines.append(f"<b>💡 Content Angle:</b>\nReact to the biggest headline above with your unique take!")
     response = "\n".join(lines) + BRAND_FOOTER
     await _send(update, response, is_callback)
+
+
+TRENDING_CATEGORIES = ["general","technology","business","entertainment","health","science","sports"]
+
+
+def _trending_category_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    row = []
+    for i, c in enumerate(TRENDING_CATEGORIES):
+        row.append(InlineKeyboardButton(c.title(), callback_data=f"tr_cat_{c}"))
+        if (i + 1) % 2 == 0:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    return make_keyboard(rows)
+
+
+async def cmd_trending(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """Entry point: ask which trending category, then show headlines WITH pictures."""
+    track_command("trending")
+    await ask(
+        update, context, "trending_category",
+        "<b>🔥 TRENDING NEWS</b>\n\nWhich category do you want trending news for?",
+        _trending_category_keyboard(), is_callback,
+    )
+
+
+def build_trending_package(cat: str):
+    """Fetch trending headlines for a niche. Returns (text, lead_article_or_None)."""
+    if cat not in TRENDING_CATEGORIES:
+        cat = "general"
+    data = fetch_json(f"{NEWS_MIRROR}/top-headlines/category/{cat}/us.json")
+    articles = [a for a in data.get("articles", []) if "error" not in data and a.get("title") not in (None, "[Removed]")]
+    if not articles:
+        return None, None
+
+    lead = None
+    for a in articles[:8]:
+        if a.get("urlToImage"):
+            lead = a
+            break
+
+    lines = [f"<b>🔥 TRENDING NOW | {cat.title()}</b>\n"]
+    for i, a in enumerate(articles[:8], 1):
+        title = a.get("title", "")
+        source = a.get("source", {}).get("name", "")
+        lines.append(f"  {i}. <b>{sanitize(truncate(title, 90))}</b>" + (f" — {sanitize(source)}" if source else ""))
+    lines.append(f"\n<b>💡 Content Angle:</b> React to headline #1 with your unique take — trending topics get the algorithm's attention.")
+    text = "\n".join(lines) + BRAND_FOOTER
+    return text, lead
+
+
+async def render_trending(update: Update, context: ContextTypes.DEFAULT_TYPE, cat: str, is_callback: bool):
+    if cat not in TRENDING_CATEGORIES:
+        cat = "general"
+    text, lead = build_trending_package(cat)
+
+    if text is None:
+        await _send(update, f"<b>🔥 TRENDING | {cat.title()}</b>\n⚠️ Could not fetch trending news right now.", is_callback)
+        return
+
+    if lead:
+        caption = (
+            f"<b>🔥 {sanitize(truncate(lead.get('title',''), 150))}</b>\n"
+            f"<i>{sanitize(truncate(lead.get('description') or '', 200))}</i>\n"
+            f"— {sanitize(lead.get('source',{}).get('name',''))}"
+        )
+        try:
+            target = update.callback_query.message if (is_callback and update.callback_query) else update.effective_message
+            await target.reply_photo(lead["urlToImage"], caption=caption[:1024], parse_mode=ParseMode.HTML, reply_markup=BACK_TO_MENU_KB)
+        except Exception:
+            pass
+    await _send(update, text, is_callback)
 
 
 async def cmd_joke(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
@@ -2614,6 +3208,383 @@ async def cmd_mystats(update: Update, context: ContextTypes.DEFAULT_TYPE, is_cal
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# NEW TOOLS — QR / TRANSLATE / CURRENCY / POLL / NAMECARD / LINKS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def cmd_qr(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """Generate a QR code. /qr <text or url> — asks for the text if not supplied."""
+    track_command("qr")
+    args = context.args if hasattr(context, "args") and context.args else []
+    if not args:
+        await ask(update, context, "qr_text",
+                  "<b>🔲 QR CODE GENERATOR</b>\n\nSend me the text, link, or number you want turned into a QR code.",
+                  is_callback=is_callback)
+        return
+    await render_qr(update, context, " ".join(args), is_callback)
+
+
+async def render_qr(update: Update, context: ContextTypes.DEFAULT_TYPE, payload: str, is_callback: bool):
+    encoded = urllib.parse.quote(payload)
+    img_url = f"{QR_API}/?size=400x400&data={encoded}"
+    caption = (
+        f"<b>🔲 QR CODE</b>\n\n"
+        f"<b>Content:</b> {sanitize(truncate(payload, 100))}\n\n"
+        f"Scan it, or long-press to save and drop it in your bio, poster, or business card."
+        + BRAND_FOOTER
+    )
+    try:
+        target = update.callback_query.message if (is_callback and update.callback_query) else update.effective_message
+        await target.reply_photo(img_url, caption=caption[:1024], parse_mode=ParseMode.HTML, reply_markup=BACK_TO_MENU_KB)
+    except Exception:
+        await _send(update, caption + f"\n\n🔗 {img_url}", is_callback)
+
+
+def _translate_lang_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    row = []
+    for i, (code, name) in enumerate(TRANSLATE_LANGS.items()):
+        row.append(InlineKeyboardButton(name, callback_data=f"tl_lang_{code}"))
+        if (i + 1) % 2 == 0:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    return make_keyboard(rows)
+
+
+async def cmd_translate(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """/translate <lang_code> <text> — or ask for language then text if not supplied."""
+    track_command("translate")
+    args = context.args if hasattr(context, "args") and context.args else []
+    if len(args) >= 2 and args[0].lower() in TRANSLATE_LANGS:
+        await render_translate(update, context, args[0].lower(), " ".join(args[1:]), is_callback)
+        return
+    await ask(update, context, "translate_lang",
+              "<b>🌐 TRANSLATE</b>\n\nWhich language do you want to translate into?",
+              _translate_lang_keyboard(), is_callback)
+
+
+async def render_translate(update: Update, context: ContextTypes.DEFAULT_TYPE, lang: str, text: str, is_callback: bool):
+    data = fetch_json(TRANSLATE_API, params={"q": text, "langpair": f"en|{lang}"})
+    translated = ""
+    if "error" not in data:
+        translated = data.get("responseData", {}).get("translatedText", "")
+    lang_name = TRANSLATE_LANGS.get(lang, lang)
+    if translated:
+        response = (
+            f"<b>🌐 TRANSLATION → {sanitize(lang_name)}</b>\n\n"
+            f"<b>Original:</b>\n{sanitize(truncate(text, 300))}\n\n"
+            f"<b>Translated:</b>\n{sanitize(truncate(translated, 300))}"
+            + BRAND_FOOTER
+        )
+    else:
+        response = f"<b>🌐 TRANSLATE</b>\n⚠️ Could not translate right now. Try shorter text or try again shortly."
+    await _send(update, response, is_callback)
+
+
+def _currency_from_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    row = []
+    for i, c in enumerate(CURRENCIES):
+        row.append(InlineKeyboardButton(c, callback_data=f"cur_from_{c}"))
+        if (i + 1) % 2 == 0:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    return make_keyboard(rows)
+
+
+def _currency_to_keyboard(exclude: str) -> InlineKeyboardMarkup:
+    rows = []
+    row = []
+    opts = [c for c in CURRENCIES if c != exclude]
+    for i, c in enumerate(opts):
+        row.append(InlineKeyboardButton(c, callback_data=f"cur_to_{c}"))
+        if (i + 1) % 2 == 0:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    return make_keyboard(rows)
+
+
+async def cmd_currency(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """/currency <amount> <from> <to> — or walk the user through it with buttons."""
+    track_command("currency")
+    args = context.args if hasattr(context, "args") and context.args else []
+    if len(args) >= 3:
+        try:
+            amount = float(args[0])
+            await render_currency(update, context, amount, args[1].upper(), args[2].upper(), is_callback)
+            return
+        except ValueError:
+            pass
+    await ask(update, context, "currency_from",
+              "<b>💱 CURRENCY CONVERTER</b>\n\nWhich currency are you converting FROM?",
+              _currency_from_keyboard(), is_callback)
+
+
+async def render_currency(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float, cfrom: str, cto: str, is_callback: bool):
+    data = fetch_json(f"{CURRENCY_API}/latest", params={"amount": amount, "from": cfrom, "to": cto})
+    if "error" in data or cto not in data.get("rates", {}):
+        response = f"<b>💱 CURRENCY</b>\n⚠️ Couldn't fetch a live rate for {sanitize(cfrom)}→{sanitize(cto)} right now."
+    else:
+        result = data["rates"][cto]
+        response = (
+            f"<b>💱 CURRENCY CONVERTER</b>\n\n"
+            f"{amount:,.2f} {sanitize(cfrom)} = <b>{result:,.2f} {sanitize(cto)}</b>\n\n"
+            f"<i>Rate as of {data.get('date','today')}</i>"
+            + BRAND_FOOTER
+        )
+    await _send(update, response, is_callback)
+
+
+async def cmd_poll(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """/poll <question> — asks for the question if not supplied, then posts a real Telegram poll."""
+    track_command("poll")
+    args = context.args if hasattr(context, "args") and context.args else []
+    if not args:
+        await ask(update, context, "poll_question",
+                  "<b>📊 POLL CREATOR</b>\n\nWhat question do you want to ask your audience?",
+                  is_callback=is_callback)
+        return
+    await render_poll(update, context, " ".join(args))
+
+
+async def render_poll(update: Update, context: ContextTypes.DEFAULT_TYPE, question: str):
+    options = ["🔥 Love it", "🤔 Not sure", "👎 Not for me"]
+    try:
+        await context.bot.send_poll(
+            chat_id=update.effective_chat.id,
+            question=truncate(question, 250),
+            options=options,
+            is_anonymous=False,
+        )
+    except Exception:
+        await update.effective_message.reply_html(f"<b>📊 POLL</b>\n⚠️ Couldn't create the poll here. Try again in a group chat.")
+
+
+async def cmd_namecard(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """Generate a simple shareable creator business card + a QR code linking to your handle."""
+    track_command("namecard")
+    user = update.effective_user
+    handle = f"@{user.username}" if user.username else user.first_name
+    args = context.args if hasattr(context, "args") and context.args else []
+    tagline = " ".join(args) if args else "Content Creator | Building in public"
+    card = (
+        f"┌────────────────────────────┐\n"
+        f"│  {sanitize(user.first_name):<26}│\n"
+        f"│  {sanitize(handle):<26}│\n"
+        f"│  {sanitize(truncate(tagline, 26)):<26}│\n"
+        f"└────────────────────────────┘"
+    )
+    text = (
+        f"<b>🪪 CREATOR NAMECARD</b>\n\n<pre>{card}</pre>\n\n"
+        f"Tip: run <code>/namecard your custom tagline here</code> to change the tagline, "
+        f"and use /qr to make a scannable QR code linking to your page."
+        + BRAND_FOOTER
+    )
+    await _send(update, text, is_callback)
+
+
+async def cmd_links(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """Show official website, creator contact, and booking links."""
+    track_command("links")
+    text = (
+        f"<b>🔗 OFFICIAL LINKS</b>\n\n"
+        f"🌐 Website: {WEBSITE_URL}\n"
+        f"💬 Chat with the creator: {CREATOR_LINK}\n"
+        f"🗓 Book a site / service: {BOOKING_URL}\n\n"
+        f"Interested in a custom bot like this one for your brand? Tap a button below."
+    )
+    if is_callback and update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=LINKS_KB, disable_web_page_preview=True)
+            return
+        except Exception:
+            pass
+    await update.effective_message.reply_html(text, reply_markup=LINKS_KB, disable_web_page_preview=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHANNEL AUTO-POST — trending news for a niche, posted to the user's own
+# Telegram channel every N minutes/hours, fully automated per user.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+AUTOPOST_FREQUENCIES = [
+    ("Every 15 min", 15), ("Every 30 min", 30), ("Every hour", 60),
+    ("Every 3 hours", 180), ("Every 6 hours", 360), ("Every 12 hours", 720),
+    ("Once a day", 1440),
+]
+
+
+def _autopost_niche_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    row = []
+    for i, cat in enumerate(TRENDING_CATEGORIES):
+        row.append(InlineKeyboardButton(cat.title(), callback_data=f"apn_{cat}"))
+        if (i + 1) % 2 == 0:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    return make_keyboard(rows)
+
+
+def _autopost_frequency_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    row = []
+    for i, (label, minutes) in enumerate(AUTOPOST_FREQUENCIES):
+        row.append(InlineKeyboardButton(label, callback_data=f"apf_{minutes}"))
+        if (i + 1) % 2 == 0:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    return make_keyboard(rows)
+
+
+async def cmd_autopost(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """Start the setup flow for automatic niche-based posting to the user's own channel."""
+    track_command("autopost")
+    text = (
+        "<b>🤖 AUTO-POST TO YOUR CHANNEL</b>\n\n"
+        "I can automatically post trending news for a niche you choose, straight to "
+        "your Telegram channel — every 15 minutes, hourly, or on whatever schedule you pick. "
+        "Great for growing views &amp; engagement on autopilot.\n\n"
+        "<b>Step 1 — Connect your channel:</b>\n"
+        "1️⃣ Add me as an <b>admin</b> of your channel (with 'Post Messages' permission)\n"
+        "2️⃣ Then either <b>forward any message from that channel here</b>, "
+        "or type its <b>@username</b>."
+    )
+    await ask(update, context, "autopost_channel_input", text, is_callback=is_callback)
+
+
+async def _resolve_channel_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Try to identify a channel from a forwarded message or a typed @username."""
+    msg = update.message
+    fwd_chat = getattr(msg, "forward_from_chat", None)
+    if fwd_chat is not None and fwd_chat.type == "channel":
+        return fwd_chat
+    handle = (msg.text or "").strip()
+    if not handle:
+        return None
+    if not handle.startswith("@"):
+        handle = "@" + handle
+    try:
+        return await context.bot.get_chat(handle)
+    except Exception:
+        return None
+
+
+async def handle_autopost_channel_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    channel = await _resolve_channel_from_message(update, context)
+    if not channel:
+        await ask(
+            update, context, "autopost_channel_input",
+            "❌ I couldn't find that channel. Forward a message from it, or send its "
+            "@username exactly (e.g. <code>@mychannel</code>) — try again:",
+            is_callback=False,
+        )
+        return
+
+    try:
+        member = await context.bot.get_chat_member(channel.id, context.bot.id)
+        is_admin = member.status in ("administrator", "creator")
+    except Exception:
+        is_admin = False
+
+    if not is_admin:
+        await update.message.reply_html(
+            f"⚠️ I found <b>{sanitize(channel.title or channel.username or 'that channel')}</b>, "
+            f"but I'm not an admin there yet. Add me as an admin (with posting permission), "
+            f"then run /autopost again."
+        )
+        return
+
+    await ask(
+        update, context, "autopost_niche",
+        f"<b>🤖 AUTO-POST</b>\n\nConnected to <b>{sanitize(channel.title or channel.username)}</b> ✅\n\n"
+        f"<b>Step 2 — Pick a niche.</b> I'll post trending news matching this niche automatically:",
+        _autopost_niche_keyboard(), is_callback=False,
+        data={"channel_id": channel.id, "channel_title": channel.title or channel.username or str(channel.id)},
+    )
+
+
+async def cmd_autoposts(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """List this user's configured auto-post channels, with toggle/delete buttons."""
+    track_command("autoposts")
+    user_id = update.effective_user.id
+    configs = db_get_autopost_by_user(user_id)
+
+    if not configs:
+        text = "<b>🤖 YOUR AUTO-POST CHANNELS</b>\n\nYou haven't set any up yet. Run /autopost to connect a channel."
+        await _send(update, text, is_callback)
+        return
+
+    lines = ["<b>🤖 YOUR AUTO-POST CHANNELS</b>\n"]
+    rows = []
+    for cfg in configs:
+        status = "🟢 ON" if cfg.get("enabled") else "🔴 OFF"
+        freq_label = next((l for l, m in AUTOPOST_FREQUENCIES if m == cfg.get("interval_minutes")), f"{cfg.get('interval_minutes')} min")
+        lines.append(f"  <b>{sanitize(cfg.get('channel_title') or cfg.get('channel_id'))}</b> — {sanitize(cfg.get('niche','general').title())} — {freq_label} — {status}")
+        toggle_label = "⏸ Pause" if cfg.get("enabled") else "▶️ Resume"
+        rows.append([
+            InlineKeyboardButton(toggle_label, callback_data=f"apt_{cfg['channel_id']}"),
+            InlineKeyboardButton("🗑 Remove", callback_data=f"apd_{cfg['channel_id']}"),
+        ])
+    lines.append("\n<i>Add another channel any time with /autopost.</i>")
+    text = "\n".join(lines)
+    markup = make_keyboard(rows) if rows else None
+    if is_callback and update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+            return
+        except Exception:
+            pass
+    await update.effective_message.reply_html(text, reply_markup=markup)
+
+
+async def post_trending_to_channel(bot, channel_id, niche: str) -> bool:
+    """Fetch trending content for a niche and post it to a channel. Returns success bool."""
+    text, lead = build_trending_package(niche)
+    if text is None:
+        return False
+    try:
+        if lead and lead.get("urlToImage"):
+            caption = (
+                f"<b>🔥 {sanitize(truncate(lead.get('title',''), 150))}</b>\n"
+                f"<i>{sanitize(truncate(lead.get('description') or '', 200))}</i>\n"
+                f"— {sanitize(lead.get('source',{}).get('name',''))}"
+                + BRAND_FOOTER
+            )
+            await bot.send_photo(chat_id=channel_id, photo=lead["urlToImage"], caption=caption[:1024], parse_mode=ParseMode.HTML)
+        else:
+            await bot.send_message(chat_id=channel_id, text=text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        return True
+    except Exception:
+        return False
+
+
+async def run_autopost_cycle(bot):
+    """Called every minute by the scheduler; posts to any channel whose interval is due."""
+    if not HAS_DB and not _mem_autopost:
+        return
+    now = datetime.utcnow()
+    for cfg in db_get_all_autopost_enabled():
+        last = cfg.get("last_posted_at")
+        interval = cfg.get("interval_minutes") or 60
+        due = True
+        if last:
+            try:
+                last_dt = datetime.fromisoformat(last)
+                due = (now - last_dt).total_seconds() >= interval * 60
+            except Exception:
+                due = True
+        if not due:
+            continue
+        ok = await post_trending_to_channel(bot, cfg["channel_id"], cfg.get("niche", "general"))
+        if ok:
+            db_update_autopost_last_posted(cfg["user_id"], cfg["channel_id"], now.isoformat())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SETTINGS COMMANDS
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2750,13 +3721,64 @@ async def cmd_settheme(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").lower().strip()
+    raw_text = update.message.text or ""
+    text = raw_text.lower().strip()
     user = update.effective_user
     db_upsert_user(user.id, user.username or user.first_name)
 
+    # ─── Step 1: is the bot waiting on a follow-up answer from this user? ─────
+    awaiting = context.user_data.get("awaiting")
+    if awaiting:
+        state = awaiting.get("state")
+        adata = awaiting.get("data", {})
+        clear_awaiting(context)
+
+        if state in ("weather_city", "weather_city_text"):
+            geo = fetch_json(GEO_API, {"name": raw_text.strip(), "count": 1, "language": "en", "format": "json"})
+            if "error" not in geo and geo.get("results"):
+                r = geo["results"][0]
+                lat, lon = r.get("latitude", DEFAULT_LAT), r.get("longitude", DEFAULT_LON)
+                full_name = f"{r.get('name', raw_text.strip())}, {r.get('country', '')}"
+            else:
+                lat, lon, full_name = DEFAULT_LAT, DEFAULT_LON, raw_text.strip()
+            await render_weather(update, context, lat, lon, full_name, False)
+            return
+
+        if state == "translate_text":
+            lang = adata.get("lang", "es")
+            await render_translate(update, context, lang, raw_text.strip(), False)
+            return
+
+        if state == "currency_amount":
+            try:
+                amount = float(re.sub(r"[^0-9.]", "", raw_text) or 0)
+            except ValueError:
+                amount = 0
+            if amount <= 0:
+                await update.message.reply_html("❌ That doesn't look like a valid amount. Try /currency again.")
+                return
+            await render_currency(update, context, amount, adata.get("from", "USD"), adata.get("to", "GHS"), False)
+            return
+
+        if state == "qr_text":
+            await render_qr(update, context, raw_text.strip(), False)
+            return
+
+        if state == "poll_question":
+            await render_poll(update, context, raw_text.strip())
+            return
+
+        if state == "autopost_channel_input":
+            await handle_autopost_channel_input(update, context)
+            return
+
+        # Unknown/expired state — fall through to normal handling below.
+
+    # ─── Step 2: keyword-based natural language routing ────────────────────────
     keyword_map = {
         ("bible","verse","devotion","prayer","scripture"): cmd_bible,
-        ("sports","score","game","football","basketball","nba","nfl"): cmd_sports,
+        ("football","soccer","premier league","la liga","uefa","champions league"): cmd_football,
+        ("sports","score","basketball","nba","nfl"): cmd_sports,
         ("motivation","motivate","inspire","quote","affirmation"): cmd_motivation,
         ("crypto","bitcoin","ethereum","coin","blockchain"): cmd_crypto,
         ("weather","rain","temperature","forecast","sunny","cloud"): cmd_weather,
@@ -2769,7 +3791,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("ai","artificial intelligence","chatgpt","claude","gpt"): cmd_ai,
         ("design","logo","art","graphic","colour","color"): cmd_design,
         ("business","startup","entrepreneur","money","income"): cmd_business,
+        ("trending","viral topics","what's happening"): cmd_trending,
         ("news","headline","breaking","current","latest"): cmd_news,
+        ("hashtag","hashtags","#"): cmd_hashtags,
+        ("qr code","qr"): cmd_qr,
+        ("translate","translation"): cmd_translate,
+        ("currency","exchange rate","convert money"): cmd_currency,
+        ("website","our site","official site"): cmd_links,
+        ("contact","reach the creator","talk to admin"): cmd_links,
+        ("book a site","book site","book a consultation","booking"): cmd_links,
     }
 
     for keywords, handler in keyword_map.items():
@@ -2780,7 +3810,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Default response
     responses = [
         f"Hey {user.first_name}! 👋 Tap the menu buttons or type a command like /sports, /motivation, or /bible.",
-        f"Hi {user.first_name}! 🚀 Type /help to see all 30+ content categories.",
+        f"Hi {user.first_name}! 🚀 Type /help to see all commands, or /links for our website &amp; contact info.",
         f"What's up {user.first_name}! 🎯 Try /start to see the full menu of content options.",
     ]
     seed = int(hashlib.md5(text.encode()).hexdigest(), 16)
@@ -2791,34 +3821,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # SEND HELPER
 # ═══════════════════════════════════════════════════════════════════════════════
 
+BACK_TO_MENU_KB = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="cmd_back_main")]])
+
+
 async def _send(update: Update, text: str, is_callback: bool):
     # Telegram message limit is 4096 chars
     MAX = 4000
     if len(text) > MAX:
         text = text[:MAX] + "..."
 
+    # A single small "Menu" button is attached so the user CAN get back to the
+    # full category list if they want — but it is never forced on them again
+    # after they've picked something. The full menu only reappears on request
+    # (tapping this button, or /start).
     if is_callback:
         try:
-            await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-        except Exception:
-            try:
-                await update.callback_query.message.reply_html(text, disable_web_page_preview=True)
-            except Exception:
-                pass
-        # Show main keyboard after response
-        try:
-            await update.callback_query.message.reply_html(
-                f"🎯 Choose your next content category:",
-                reply_markup=MAIN_KB,
-                disable_web_page_preview=True,
+            await update.callback_query.edit_message_text(
+                text, parse_mode=ParseMode.HTML, disable_web_page_preview=True,
+                reply_markup=BACK_TO_MENU_KB,
             )
         except Exception:
-            pass
+            try:
+                await update.callback_query.message.reply_html(
+                    text, disable_web_page_preview=True, reply_markup=BACK_TO_MENU_KB,
+                )
+            except Exception:
+                pass
     else:
         try:
-            await update.message.reply_html(text, disable_web_page_preview=True)
+            await update.message.reply_html(
+                text, disable_web_page_preview=True, reply_markup=BACK_TO_MENU_KB,
+            )
         except Exception:
-            await update.message.reply_html(text[:MAX], disable_web_page_preview=True)
+            await update.message.reply_html(
+                text[:MAX], disable_web_page_preview=True, reply_markup=BACK_TO_MENU_KB,
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2875,6 +3912,38 @@ async def send_scheduled_content(bot):
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# KEEP-ALIVE WEB SERVER (for Render / Railway / Replit-style "Web Service" hosting)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Render's free tier only supports Web Services, which require binding to $PORT
+# and answering health checks. The bot itself uses long-polling, so this tiny
+# HTTP server runs in a background thread purely to satisfy that requirement
+# (and gives you a URL you can ping with UptimeRobot/cron-job.org to prevent
+# the free instance from spinning down).
+
+def start_keepalive_server():
+    try:
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        class _Health(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"ContentPro Bot is running.")
+
+            def log_message(self, *args):
+                pass  # silence default request logging
+
+        def _serve():
+            HTTPServer(("0.0.0.0", PORT), _Health).serve_forever()
+
+        threading.Thread(target=_serve, daemon=True).start()
+        print(f"✅ Keep-alive server listening on 0.0.0.0:{PORT}")
+    except Exception as e:
+        print(f"⚠️  Could not start keep-alive server: {e}")
+
+
 def main():
     if TELEGRAM_TOKEN in ("YOUR_BOT_TOKEN_HERE", ""):
         print("ERROR: Set TELEGRAM_TOKEN environment variable.")
@@ -2930,6 +3999,22 @@ def main():
     app.add_handler(CommandHandler("meme",              cmd_meme))
     app.add_handler(CommandHandler("image",             cmd_image))
 
+    # New tools (live football, trending news w/ pictures, QR, translate, currency, poll, etc.)
+    app.add_handler(CommandHandler("football",          cmd_football))
+    app.add_handler(CommandHandler("trending",          cmd_trending))
+    app.add_handler(CommandHandler("qr",                cmd_qr))
+    app.add_handler(CommandHandler("translate",         cmd_translate))
+    app.add_handler(CommandHandler("currency",          cmd_currency))
+    app.add_handler(CommandHandler("poll",              cmd_poll))
+    app.add_handler(CommandHandler("namecard",          cmd_namecard))
+    app.add_handler(CommandHandler("links",             cmd_links))
+    app.add_handler(CommandHandler("website",           cmd_links))
+    app.add_handler(CommandHandler("contact",           cmd_links))
+    app.add_handler(CommandHandler("book",              cmd_links))
+    app.add_handler(CommandHandler("autopost",          cmd_autopost))
+    app.add_handler(CommandHandler("autoposts",         cmd_autoposts))
+    app.add_handler(CommandHandler("myautoposts",       cmd_autoposts))
+
     # Utilities
     app.add_handler(CommandHandler("subscribe",         cmd_subscribe))
     app.add_handler(CommandHandler("reminder",          cmd_reminder_cmd))
@@ -2944,6 +4029,8 @@ def main():
 
     # ─── Callback & Message Handlers ─────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(button_handler, pattern="^cmd_"))
+    app.add_handler(CallbackQueryHandler(flow_callback_handler,
+                                          pattern="^(wx_|ht_|fb_|tr_|tl_|cur_|apn_|apf_|apt_|apd_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # ─── Scheduler ────────────────────────────────────────────────────────────
@@ -2956,17 +4043,31 @@ def main():
             args=[app.bot],
             misfire_grace_time=30,
         )
+        scheduler.add_job(
+            run_autopost_cycle,
+            trigger="cron",
+            minute="*",
+            args=[app.bot],
+            misfire_grace_time=30,
+            id="autopost_cycle",
+        )
         scheduler.start()
-        print("✅ Scheduler started")
+        print("✅ Scheduler started (daily digests + per-minute channel auto-post check)")
+    else:
+        print("⚠️  APScheduler not installed — /autopost and /subscribe won't run automatically. `pip install apscheduler`.")
+
+    # ─── Keep-alive web server (lets Render's free Web Service plan bind $PORT) ─
+    start_keepalive_server()
 
     # ─── Launch ───────────────────────────────────────────────────────────────
     print("\n" + "═" * 55)
-    print("  🚀 ContentPro Bot v3.0 — ONLINE")
+    print(f"  🚀 ContentPro Bot v{BOT_VERSION} — ONLINE")
     print(f"  Made with ❤️  by {BOT_AUTHOR}")
     print("═" * 55)
     print("  Core:    /sports /bible /game /design /motivation")
     print("  Enhanced:/weather /crypto /ai /music /news /quiz")
     print("  Premium: /roast /story /recipe /fitness /travel")
+    print("  New:     /football /trending /qr /translate /currency /poll /links")
     print("═" * 55)
     print("  Press Ctrl+C to stop.\n")
 

@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: contentpro-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: WEBSITE_URL
+        value: https://dtc-official.vercel.app
+      - key: CREATOR_USERNAME
+        value: philemon4u
+      - key: BOOKING_URL
+        value: https://bookmei.vercel.app/
+      - key: PORT
+        value: 10000
