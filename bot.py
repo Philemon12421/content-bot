@@ -31,6 +31,7 @@ import json
 import random
 import hashlib
 import html as html_mod
+import asyncio
 import threading
 import time
 import re
@@ -4033,28 +4034,31 @@ def main():
                                           pattern="^(wx_|ht_|fb_|tr_|tl_|cur_|apn_|apf_|apt_|apd_)"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # ─── Scheduler ────────────────────────────────────────────────────────────
-    if HAS_SCHEDULER:
-        scheduler = AsyncIOScheduler()
-        scheduler.add_job(
-            send_scheduled_content,
-            trigger="cron",
-            minute="*",
-            args=[app.bot],
-            misfire_grace_time=30,
-        )
-        scheduler.add_job(
-            run_autopost_cycle,
-            trigger="cron",
-            minute="*",
-            args=[app.bot],
-            misfire_grace_time=30,
-            id="autopost_cycle",
-        )
-        scheduler.start()
-        print("✅ Scheduler started (daily digests + per-minute channel auto-post check)")
-    else:
-        print("⚠️  APScheduler not installed — /autopost and /subscribe won't run automatically. `pip install apscheduler`.")
+    # ─── Scheduler (started inside post_init so it runs in PTB's event loop) ──
+    async def _post_init(application):
+        if HAS_SCHEDULER:
+            scheduler = AsyncIOScheduler()
+            scheduler.add_job(
+                send_scheduled_content,
+                trigger="cron",
+                minute="*",
+                args=[application.bot],
+                misfire_grace_time=30,
+            )
+            scheduler.add_job(
+                run_autopost_cycle,
+                trigger="cron",
+                minute="*",
+                args=[application.bot],
+                misfire_grace_time=30,
+                id="autopost_cycle",
+            )
+            scheduler.start()
+            print("✅ Scheduler started (daily digests + per-minute channel auto-post check)")
+        else:
+            print("⚠️  APScheduler not installed — /autopost and /subscribe won't run automatically. `pip install apscheduler`.")
+
+    app.post_init = _post_init
 
     # ─── Keep-alive web server (lets Render's free Web Service plan bind $PORT) ─
     start_keepalive_server()
@@ -4070,6 +4074,16 @@ def main():
     print("  New:     /football /trending /qr /translate /currency /poll /links")
     print("═" * 55)
     print("  Press Ctrl+C to stop.\n")
+
+    # python-telegram-bot 21.x internally calls asyncio.get_event_loop() inside
+    # run_polling(). Python 3.14 removed that function's old behavior of
+    # auto-creating a loop in the main thread when none exists, which crashes
+    # PTB with "There is no current event loop in thread 'MainThread'". Setting
+    # one up ourselves first works around it on any Python version.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
